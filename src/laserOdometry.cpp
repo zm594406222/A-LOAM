@@ -1,10 +1,9 @@
 // This is an advanced implementation of the algorithm described in the following paper:
 //   J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time.
-//     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014. 
+//     Robotics: Science and Systems Conference (RSS). Berkeley, CA, July 2014.
 
 // Modifier: Tong Qin               qintonguav@gmail.com
 // 	         Shaozu Cao 		    saozu.cao@connect.ust.hk
-
 
 // Copyright 2013, Ji Zhang, Carnegie Mellon University
 // Further contributions copyright (c) 2016, Southwest Research Institute
@@ -56,8 +55,8 @@
 #include "aloam_velodyne/tic_toc.h"
 #include "lidarFactor.hpp"
 
+// 默认不做畸变校正
 #define DISTORTION 0
-
 
 int corner_correspondence = 0, plane_correspondence = 0;
 
@@ -93,10 +92,10 @@ int laserCloudSurfLastNum = 0;
 Eigen::Quaterniond q_w_curr(1, 0, 0, 0);
 Eigen::Vector3d t_w_curr(0, 0, 0);
 
-// q_curr_last(x, y, z, w), t_curr_last
+// 待优化求解的参数，映射为：q_curr_last(x, y, z, w), t_curr_last
 double para_q[4] = {0, 0, 0, 1};
 double para_t[3] = {0, 0, 0};
-
+// 当前时刻与上一时刻的位姿变换
 Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
 Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
 
@@ -107,16 +106,17 @@ std::queue<sensor_msgs::PointCloud2ConstPtr> surfLessFlatBuf;
 std::queue<sensor_msgs::PointCloud2ConstPtr> fullPointsBuf;
 std::mutex mBuf;
 
-// undistort lidar point
+//当前点云中的点相对第一个点去除因匀速运动产生的畸变，效果相当于得到在点云扫描开始位置静止扫描得到的点云
 void TransformToStart(PointType const *const pi, PointType *const po)
 {
-    //interpolation ratio
+    //插值系数
     double s;
     if (DISTORTION)
         s = (pi->intensity - int(pi->intensity)) / SCAN_PERIOD;
     else
         s = 1.0;
-    //s = 1;
+    
+    //对于起始点，T_point_last是单位矩阵；对于终止点，T_point_last是上一时刻的帧间估计的位姿变换
     Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);
     Eigen::Vector3d t_point_last = s * t_last_curr;
     Eigen::Vector3d point(pi->x, pi->y, pi->z);
@@ -128,8 +128,7 @@ void TransformToStart(PointType const *const pi, PointType *const po)
     po->intensity = pi->intensity;
 }
 
-// transform all lidar points to the start of the next frame
-
+//将上一帧点云中的点相对结束位置去除因匀速运动产生的畸变，效果相当于得到在点云扫描结束位置静止扫描得到的点云
 void TransformToEnd(PointType const *const pi, PointType *const po)
 {
     // undistort point first
@@ -271,6 +270,7 @@ int main(int argc, char **argv)
             }
             else
             {
+                //当前帧的边缘点、平面点的点数量
                 int cornerPointsSharpNum = cornerPointsSharp->points.size();
                 int surfPointsFlatNum = surfPointsFlat->points.size();
 
@@ -299,14 +299,15 @@ int main(int argc, char **argv)
                     for (int i = 0; i < cornerPointsSharpNum; ++i)
                     {
                         TransformToStart(&(cornerPointsSharp->points[i]), &pointSel);
+                        // pointSearchSqDis[0]：保存最近的边缘点距离
                         kdtreeCornerLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
-
+                        // 分别是最近点、次近点的index
                         int closestPointInd = -1, minPointInd2 = -1;
                         if (pointSearchSqDis[0] < DISTANCE_SQ_THRESHOLD)
                         {
                             closestPointInd = pointSearchInd[0];
                             int closestPointScanID = int(laserCloudCornerLast->points[closestPointInd].intensity);
-
+                            //minPointSqDis2：保存次近的边缘点距离
                             double minPointSqDis2 = DISTANCE_SQ_THRESHOLD;
                             // search in the direction of increasing scan line
                             for (int j = closestPointInd + 1; j < (int)laserCloudCornerLast->points.size(); ++j)
@@ -360,6 +361,7 @@ int main(int argc, char **argv)
                                 }
                             }
                         }
+                        // 当前边缘点curr_point找到两个最近的（不在一条扫描线上）两个点：last_point_a和last_point_b
                         if (minPointInd2 >= 0) // both closestPointInd and minPointInd2 is valid
                         {
                             Eigen::Vector3d curr_point(cornerPointsSharp->points[i].x,
@@ -386,6 +388,7 @@ int main(int argc, char **argv)
                     // find correspondence for plane features
                     for (int i = 0; i < surfPointsFlatNum; ++i)
                     {
+                        // 当前时刻中的点云转换到上一时刻的坐标系下
                         TransformToStart(&(surfPointsFlat->points[i]), &pointSel);
                         kdtreeSurfLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
 
@@ -412,7 +415,7 @@ int main(int argc, char **argv)
                                                     (laserCloudSurfLast->points[j].z - pointSel.z) *
                                                         (laserCloudSurfLast->points[j].z - pointSel.z);
 
-                                // if in the same or lower scan line
+                                // if in the same
                                 if (int(laserCloudSurfLast->points[j].intensity) <= closestPointScanID && pointSqDis < minPointSqDis2)
                                 {
                                     minPointSqDis2 = pointSqDis;
@@ -440,7 +443,7 @@ int main(int argc, char **argv)
                                                     (laserCloudSurfLast->points[j].z - pointSel.z) *
                                                         (laserCloudSurfLast->points[j].z - pointSel.z);
 
-                                // if in the same or higher scan line
+                                // if in the same
                                 if (int(laserCloudSurfLast->points[j].intensity) >= closestPointScanID && pointSqDis < minPointSqDis2)
                                 {
                                     minPointSqDis2 = pointSqDis;
@@ -458,17 +461,17 @@ int main(int argc, char **argv)
                             {
 
                                 Eigen::Vector3d curr_point(surfPointsFlat->points[i].x,
-                                                            surfPointsFlat->points[i].y,
-                                                            surfPointsFlat->points[i].z);
-                                Eigen::Vector3d last_point_a(laserCloudSurfLast->points[closestPointInd].x,
-                                                                laserCloudSurfLast->points[closestPointInd].y,
-                                                                laserCloudSurfLast->points[closestPointInd].z);
-                                Eigen::Vector3d last_point_b(laserCloudSurfLast->points[minPointInd2].x,
-                                                                laserCloudSurfLast->points[minPointInd2].y,
-                                                                laserCloudSurfLast->points[minPointInd2].z);
-                                Eigen::Vector3d last_point_c(laserCloudSurfLast->points[minPointInd3].x,
-                                                                laserCloudSurfLast->points[minPointInd3].y,
-                                                                laserCloudSurfLast->points[minPointInd3].z);
+                                                           surfPointsFlat->points[i].y,
+                                                           surfPointsFlat->points[i].z);
+                                Eigen::Vector3d last_point_a(laserCloudSurfLast->points[closestPointInd].x, //kdtree搜索的最近点
+                                                             laserCloudSurfLast->points[closestPointInd].y,
+                                                             laserCloudSurfLast->points[closestPointInd].z);
+                                Eigen::Vector3d last_point_b(laserCloudSurfLast->points[minPointInd2].x, //同一条扫描线上的次近点
+                                                             laserCloudSurfLast->points[minPointInd2].y,
+                                                             laserCloudSurfLast->points[minPointInd2].z);
+                                Eigen::Vector3d last_point_c(laserCloudSurfLast->points[minPointInd3].x, //相邻扫描线的次近点
+                                                             laserCloudSurfLast->points[minPointInd3].y,
+                                                             laserCloudSurfLast->points[minPointInd3].z);
 
                                 double s;
                                 if (DISTORTION)
@@ -500,14 +503,14 @@ int main(int argc, char **argv)
                     printf("solver time %f ms \n", t_solver.toc());
                 }
                 printf("optimization twice time %f \n", t_opt.toc());
-
+                // 根据当前lidar与上一时刻的lidar数据估计两帧间位姿变换，然后更新相对世界坐标系的当前位姿，以平移与四元数表示
                 t_w_curr = t_w_curr + q_w_curr * t_last_curr;
                 q_w_curr = q_w_curr * q_last_curr;
             }
 
             TicToc t_pub;
 
-            // publish odometry
+            // publish odometry and odom path 10HZ (世界坐标系为/camera_init坐标系)
             nav_msgs::Odometry laserOdometry;
             laserOdometry.header.frame_id = "/camera_init";
             laserOdometry.child_frame_id = "/laser_odom";
@@ -564,14 +567,17 @@ int main(int argc, char **argv)
 
             // std::cout << "the size of corner last is " << laserCloudCornerLastNum << ", and the size of surf last is " << laserCloudSurfLastNum << '\n';
 
+            //用于下次搜索，进行data association
             kdtreeCornerLast->setInputCloud(laserCloudCornerLast);
             kdtreeSurfLast->setInputCloud(laserCloudSurfLast);
 
+            //不是以10HZ的频率发布点云，这里skipFrameNum = 5,所以发布频率为2HZ
             if (frameCount % skipFrameNum == 0)
             {
                 frameCount = 0;
 
                 sensor_msgs::PointCloud2 laserCloudCornerLast2;
+                //注意：这里的时间戳与发布的odometry的时间戳是一致的
                 pcl::toROSMsg(*laserCloudCornerLast, laserCloudCornerLast2);
                 laserCloudCornerLast2.header.stamp = ros::Time().fromSec(timeSurfPointsLessFlat);
                 laserCloudCornerLast2.header.frame_id = "/camera";
@@ -591,7 +597,7 @@ int main(int argc, char **argv)
             }
             printf("publication time %f ms \n", t_pub.toc());
             printf("whole laserOdometry time %f ms \n \n", t_whole.toc());
-            if(t_whole.toc() > 100)
+            if (t_whole.toc() > 100)
                 ROS_WARN("odometry process over 100ms");
 
             frameCount++;

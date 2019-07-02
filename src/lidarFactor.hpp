@@ -30,8 +30,8 @@ struct LidarEdgeFactor
 		Eigen::Matrix<T, 3, 1> t_last_curr{T(s) * t[0], T(s) * t[1], T(s) * t[2]};
 
 		Eigen::Matrix<T, 3, 1> lp;
-		lp = q_last_curr * cp + t_last_curr;
-
+		lp = q_last_curr * cp + t_last_curr;//当前时刻的点云转换到上一时刻的坐标系中
+		//参见论文中损失函数的公式
 		Eigen::Matrix<T, 3, 1> nu = (lp - lpa).cross(lp - lpb);
 		Eigen::Matrix<T, 3, 1> de = lpa - lpb;
 
@@ -61,6 +61,7 @@ struct LidarPlaneFactor
 		: curr_point(curr_point_), last_point_j(last_point_j_), last_point_l(last_point_l_),
 		  last_point_m(last_point_m_), s(s_)
 	{
+		//j l m 三个点构成平面的法向量方向
 		ljm_norm = (last_point_j - last_point_l).cross(last_point_j - last_point_m);
 		ljm_norm.normalize();
 	}
@@ -82,8 +83,9 @@ struct LidarPlaneFactor
 		Eigen::Matrix<T, 3, 1> t_last_curr{T(s) * t[0], T(s) * t[1], T(s) * t[2]};
 
 		Eigen::Matrix<T, 3, 1> lp;
-		lp = q_last_curr * cp + t_last_curr;
-
+		lp = q_last_curr * cp + t_last_curr; //当前时刻的点云转换到上一时刻的坐标系中
+											 									 
+		//参见论文中损失函数的公式
 		residual[0] = (lp - lpj).dot(ljm);
 
 		return true;
@@ -116,9 +118,11 @@ struct LidarPlaneNormFactor
 		Eigen::Quaternion<T> q_w_curr{q[3], q[0], q[1], q[2]};
 		Eigen::Matrix<T, 3, 1> t_w_curr{t[0], t[1], t[2]};
 		Eigen::Matrix<T, 3, 1> cp{T(curr_point.x()), T(curr_point.y()), T(curr_point.z())};
+
 		Eigen::Matrix<T, 3, 1> point_w;
 		point_w = q_w_curr * cp + t_w_curr;
 
+		// n点到平面的距离公式（高中几何知识）：
 		Eigen::Matrix<T, 3, 1> norm(T(plane_unit_norm.x()), T(plane_unit_norm.y()), T(plane_unit_norm.z()));
 		residual[0] = norm.dot(point_w) + T(negative_OA_dot_norm);
 		return true;
@@ -137,12 +141,12 @@ struct LidarPlaneNormFactor
 	double negative_OA_dot_norm;
 };
 
-
+// unused
 struct LidarDistanceFactor
 {
 
-	LidarDistanceFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d closed_point_) 
-						: curr_point(curr_point_), closed_point(closed_point_){}
+	LidarDistanceFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d closed_point_)
+		: curr_point(curr_point_), closed_point(closed_point_) {}
 
 	template <typename T>
 	bool operator()(const T *q, const T *t, T *residual) const
@@ -152,7 +156,6 @@ struct LidarDistanceFactor
 		Eigen::Matrix<T, 3, 1> cp{T(curr_point.x()), T(curr_point.y()), T(curr_point.z())};
 		Eigen::Matrix<T, 3, 1> point_w;
 		point_w = q_w_curr * cp + t_w_curr;
-
 
 		residual[0] = point_w.x() - T(closed_point.x());
 		residual[1] = point_w.y() - T(closed_point.y());
